@@ -1,0 +1,24 @@
+# Applied only by run-baseline.ps1 to a separate Compose project and volume.
+services:
+  db:
+    cpus: 2.0
+    mem_limit: 1g
+  app:
+    cpus: 1.0
+    mem_limit: 512m
+  redis:
+    cpus: 0.5
+    mem_limit: 192m
+  lb:
+    cpus: 0.5
+    mem_limit: 128m
+  benchmark:
+    image: grafana/k6:0.57.0
+    profiles: [tools]
+    entrypoint: ["k6", "run", "/scripts/baseline.js"]
+    cpus: 1.0
+    mem_limit: 1g
+    volumes:
+      - ./load-tests:/scripts:ro
+      - ./results:/results
+    networks: [backend]

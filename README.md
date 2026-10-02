@@ -1,3 +1,16 @@
+# Лабораторна №5 — Performance Baseline
+
+Додано три k6-сценарії, ступені навантаження 10/25/50/100/200, окремий прогрів, ізольовану БД, збір CPU/RAM і PostgreSQL counters та генерацію CSV/HTML із графіками. [Методика, запуск і картка baseline](docs/performance-baseline.md).
+
+```powershell
+.\scripts\run-baseline.ps1 -Scenario read -Instances 1 -CacheMode disabled
+.\scripts\run-baseline.ps1 -Scenario write -Instances 1
+.\scripts\run-baseline.ps1 -Scenario workflow -Instances 1
+Start-Process .\results\baseline.html
+```
+
+**Нічого не запускалося; фактичні результати з'являться після ваших прогонів.** Для scaling/cache comparisons команди наведено в методиці.
+
 # Лабораторна №4 — розподілене кешування
 
 До масштабованого Java API додано спільний Redis і Cache-Aside для `GET /api/products?page=...&size=...`. Бізнес-дані залишаються в PostgreSQL. Redis доступний усім backend-реплікам через внутрішню Docker network, без порту на хості.
