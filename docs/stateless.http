@@ -1,0 +1,74 @@
+### IntelliJ IDEA HTTP Client. Start the full Compose stack first.
+@node1 = http://localhost:8080
+@node2 = http://localhost:8081
+
+### Compare X-Instance-ID: node-1
+GET {{node1}}/actuator/health
+
+### Compare X-Instance-ID: node-2
+GET {{node2}}/actuator/health
+
+### Create shared customer on node 1 (change email when repeating)
+# @no-cookie-jar
+POST {{node1}}/api/customers
+Content-Type: application/json
+
+{"name":"Stateless Customer","email":"stateless-demo@example.com"}
+
+> {% client.global.set("statelessCustomerId", response.body.id); %}
+
+### Create product on node 1 (change SKU when repeating)
+# @no-cookie-jar
+POST {{node1}}/api/products
+Content-Type: application/json
+
+{"sku":"STATELESS-001","name":"Shared product","description":"Created on node 1","price":100.00,"stock":10}
+
+> {% client.global.set("statelessProductId", response.body.id); %}
+
+### Read the same product from node 2
+# @no-cookie-jar
+GET {{node2}}/api/products/{{statelessProductId}}
+
+### Update on node 2
+# @no-cookie-jar
+PUT {{node2}}/api/products/{{statelessProductId}}
+Content-Type: application/json
+
+{"name":"Updated on node 2","description":"Shared PostgreSQL","price":125.00}
+
+### Read updated price 125 on node 1; supplied header must not spoof the response identity
+# @no-cookie-jar
+GET {{node1}}/api/products/{{statelessProductId}}
+X-Instance-ID: pretend-node-2
+
+### Place on node 1; total 250, remaining stock 8
+# @no-cookie-jar
+POST {{node1}}/api/orders
+Content-Type: application/json
+
+{"customerId":"{{statelessCustomerId}}","items":[{"productId":"{{statelessProductId}}","quantity":2}]}
+
+> {% client.global.set("statelessOrderId", response.body.id); %}
+
+### In the terminal: docker compose kill -s SIGKILL app
+### Then read the committed order from the surviving node
+# @no-cookie-jar
+GET {{node2}}/api/orders/{{statelessOrderId}}
+
+### Continue the workflow on node 2
+# @no-cookie-jar
+POST {{node2}}/api/orders/{{statelessOrderId}}/cancel
+
+### In the terminal: docker compose start app
+### After node 1 becomes healthy: expect CANCELLED
+# @no-cookie-jar
+GET {{node1}}/api/orders/{{statelessOrderId}}
+
+### Repeated cancellation on node 1 must not double-return the stock
+# @no-cookie-jar
+POST {{node1}}/api/orders/{{statelessOrderId}}/cancel
+
+### Expect stock = 10
+# @no-cookie-jar
+GET {{node2}}/api/products/{{statelessProductId}}

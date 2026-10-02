@@ -1,3 +1,5 @@
+app:
+  instance-id: ${INSTANCE_ID:${HOSTNAME:}}
 spring:
   application:
     name: order-service
@@ -9,6 +11,8 @@ spring:
       maximum-pool-size: ${DB_POOL_SIZE:10}
       connection-timeout: 3000
       connection-init-sql: "SET lock_timeout = '3s'"
+      data-source-properties:
+        ApplicationName: ${app.instance-id:order-service}
   jdbc:
     template:
       query-timeout: 10s

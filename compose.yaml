@@ -1,4 +1,30 @@
 name: high-load-lab1
+
+# Keep the project name to reuse the PostgreSQL volume created in Lab 1.
+x-backend: &backend
+  image: high-load-order-service:lab2
+  environment: &backend-environment
+    DB_URL: jdbc:postgresql://db:5432/orders
+    DB_USERNAME: orders
+    DB_PASSWORD: ${DB_PASSWORD:-lab1-local-password}
+    DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
+    JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=75.0
+  depends_on:
+    db:
+      condition: service_healthy
+  networks:
+    - backend
+  read_only: true
+  tmpfs:
+    - /tmp
+  healthcheck:
+    test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/actuator/health"]
+    interval: 10s
+    timeout: 3s
+    start_period: 40s
+    retries: 12
+  restart: unless-stopped
+
 services:
   db:
     image: postgres:17.4-alpine
@@ -18,27 +44,23 @@ services:
     restart: unless-stopped
 
   app:
+    <<: *backend
     build: .
     environment:
-      DB_URL: jdbc:postgresql://db:5432/orders
-      DB_USERNAME: orders
-      DB_PASSWORD: ${DB_PASSWORD:-lab1-local-password}
-      DB_POOL_SIZE: 10
-      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=75.0
+      <<: *backend-environment
+      INSTANCE_ID: node-1
     ports:
       - "127.0.0.1:${APP_PORT:-8080}:8080"
-    depends_on:
-      db:
-        condition: service_healthy
-    networks:
-      - backend
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/actuator/health"]
-      interval: 10s
-      timeout: 3s
-      start_period: 40s
-      retries: 12
-    restart: unless-stopped
+
+  app2:
+    <<: *backend
+    # app builds this shared image. Start the whole stack with --build on a fresh checkout.
+    pull_policy: never
+    environment:
+      <<: *backend-environment
+      INSTANCE_ID: node-2
+    ports:
+      - "127.0.0.1:${APP2_PORT:-8081}:8080"
 
 networks:
   backend:

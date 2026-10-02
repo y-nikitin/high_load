@@ -1,6 +1,8 @@
-# Система замовлень для лабораторної роботи №1
+# Система замовлень для лабораторних робіт №1–2
 
 Java-проєкт для роботи «Проєктування архітектури та реалізація базового прототипу». Система керує клієнтами, каталогом і замовленнями: перевіряє залишки, обчислює вартість, атомарно списує товари та повертає їх при скасуванні. Дані зберігаються в PostgreSQL і переживають перезапуск контейнерів.
+
+Гілка `stateless` додає лабораторну №2: два взаємозамінні backend-процеси зі спільною PostgreSQL, ідентифікацію через `X-Instance-ID`, аудит стану та сценарії перевірки консистентності й втрати вузла. Реалізація другої лабораторної **не запускалася і не тестувалася під час підготовки змін на прохання користувача**; команди перевірки наведено нижче.
 
 Стек: **Java 21, Spring Boot 3.5.15, Spring JDBC, PostgreSQL 17.4, Flyway, Maven 3.9.9, Docker Compose, OpenAPI/Swagger UI**. Це модульний моноліт із REST API. Бізнес-дані не зберігаються в пам'яті процесу. Усі суми — в гривнях (UAH).
 
@@ -12,22 +14,128 @@ Java-проєкт для роботи «Проєктування архітек�
 docker compose up --build -d --wait
 ```
 
-Команда збирає backend, запускає PostgreSQL, чекає готовності БД, застосовує Flyway-міграцію і перевіряє готовність API. Порожня база готова до використання; ручне створення таблиць не потрібне.
+Команда збирає спільний образ `high-load-order-service:lab2`, запускає PostgreSQL та два backend-контейнери (`app`, `app2`), застосовує Flyway-міграцію і чекає готовності всіх трьох сервісів. Порожня база готова до використання; ручне створення таблиць не потрібне. `app2` використовує образ, зібраний сервісом `app`, тому на новому checkout запускайте весь стек із `--build`.
 
-- Swagger UI: <http://localhost:8080/swagger-ui/index.html>
-- OpenAPI JSON: <http://localhost:8080/v3/api-docs>
-- Перевірка застосунку та БД: <http://localhost:8080/actuator/health>
+| Вузол | Swagger UI | Перевірка готовності | Заголовок відповіді |
+|---|---|---|---|
+| `app` | <http://localhost:8080/swagger-ui/index.html> | <http://localhost:8080/actuator/health> | `X-Instance-ID: node-1` |
+| `app2` | <http://localhost:8081/swagger-ui/index.html> | <http://localhost:8081/actuator/health> | `X-Instance-ID: node-2` |
+
+OpenAPI JSON: `/v3/api-docs` на кожному вузлі. Ім'я Compose-проєкту `high-load-lab1` збережено навмисно: використовується той самий volume `high-load-lab1_postgres-data`, що й у першій лабораторній. Після переходу з попередньої гілки ця команда оновить `app`, додасть `app2` і збереже дані БД.
 
 ```shell
 docker compose ps
-docker compose logs -f app
+docker compose logs -f app app2
 docker compose stop
 docker compose start
 ```
 
-Якщо порт 8080 зайнятий, скопіюйте `.env.example` у `.env` і змініть `APP_PORT`. Для стандартного запуску `.env` не потрібен. PostgreSQL у базовій конфігурації не публікує порт на хості. HTTP прив'язаний до `127.0.0.1`. Пароль за замовчуванням призначений для локальної лабораторної; автентифікація та публічне розгортання не входять у цей MVP.
+Якщо порти зайняті, скопіюйте `.env.example` у `.env` і змініть `APP_PORT` та/або `APP2_PORT`. Для стандартного запуску `.env` не потрібен. PostgreSQL у базовій конфігурації не публікує порт на хості. HTTP прив'язаний до `127.0.0.1`. Пароль за замовчуванням призначений для локальної лабораторної; автентифікація та публічне розгортання не входять у цей MVP.
 
-## Демонстрація для захисту
+## Лабораторна №2 — перевірка та захист
+
+Після запуску Compose, у PowerShell із кореня проєкту:
+
+```powershell
+# Перевірка обох вузлів без зупинки контейнерів
+.\scripts\demo-stateless.ps1
+
+# Додатково: SIGKILL першого backend, робота через другий, запуск першого знову
+.\scripts\demo-stateless.ps1 -SimulateFailure
+```
+
+Якщо порти змінено:
+
+```powershell
+.\scripts\demo-stateless.ps1 -Node1Url http://localhost:8090 -Node2Url http://localhost:8091 -SimulateFailure
+```
+
+Скрипт не збирає і не запускає стек за вас. Він перевіряє `X-Instance-ID` у кожній відповіді, відсутність `Set-Cookie`, правильні HTTP-статуси та бізнес-значення. Нові демонстраційні клієнт, товар і замовлення мають унікальні email/SKU й залишаються в БД. З `-SimulateFailure` він зупиняє лише `app` і відновлює його в `finally`; PostgreSQL та `app2` не перезапускаються.
+
+Сценарій демонстрації:
+
+1. `POST` клієнта й товару на `node-1`, читання на `node-2`.
+2. `PUT` нової ціни на `node-2`, читання оновленого товару на `node-1`.
+3. Оформлення замовлення на `node-1`, читання його суми та списаного залишку на `node-2`.
+4. Після успішного створення замовлення: `docker compose kill -s SIGKILL app`.
+5. `node-2` читає підтверджене замовлення і продовжує бізнес-сценарій — скасовує його та повертає товар.
+6. `docker compose start app`; після health `UP` відновлений `node-1` бачить `CANCELLED`.
+7. Повторне скасування на `node-1` не повертає товар удруге; `node-2` бачить початковий залишок.
+
+Для ручної демонстрації є [`docs/stateless.http`](docs/stateless.http) для IntelliJ HTTP Client. Найкоротша перевірка двох вузлів через cURL:
+
+```shell
+curl -i http://localhost:8080/actuator/health
+curl -i http://localhost:8081/actuator/health
+```
+
+У Windows PowerShell 5 використовуйте `curl.exe`, оскільки `curl` там може бути псевдонімом іншої команди. Бізнесові cURL-запити з розділу API можна виконувати почергово на двох портах з тими самими UUID. Cookies та sticky sessions не потрібні. Балансувальника ще немає: адресу живого вузла явно вибирає клієнт; автоматична маршрутизація належить до лабораторної №3.
+
+### Аудит стану
+
+| Категорія | Об'єкт / місце в коді | Висновок і поводження при втраті JVM |
+|---|---|---|
+| Shared / Externalized | `customers`, `products`, `orders`, `order_items`; усі `*Repository` | Увесь бізнес-стан у спільній PostgreSQL. Кожен вузол читає ті самі підтверджені записи |
+| Shared / Externalized | Залишки й ціни, статуси замовлень | У БД, захищені транзакціями та обмеженнями; немає локальних копій між запитами |
+| Shared / Externalized | Узгодження конкурентних операцій | PostgreSQL `FOR UPDATE`, однаковий порядок блокування товарів. Блокування діють між різними JVM |
+| Ephemeral / Local Safe | `quantities`, `lockedProducts`, `items`, `total` у `OrderService.create` | Локальні змінні одного виклику; не записуються у поля singleton-сервісу, після запиту не утримують бізнес-контекст |
+| Ephemeral / Local Safe | DTO, `PageResponse`, результати SQL | Об'єкти конкретного запиту/відповіді; не є джерелом стану для наступних запитів |
+| Ephemeral / Local Safe | HikariCP, ресурси JDBC, транзакційний контекст Spring | Інфраструктура процесу. Пули відтворюються при запуску; незавершені транзакції БД відкотить після втрати з'єднань |
+| Ephemeral / Local Safe | `static final RowMapper`, logger, константи, посилання на залежності у сервісах | Незмінна конфігурація та інфраструктура, а не змінний бізнес-стан |
+| Ephemeral / Local Safe | `InstanceIdFilter.instanceId` | Незмінна діагностична мітка; не використовується для пошуку даних чи прив'язки клієнта |
+| Ephemeral / Local Safe | Логи stdout, локальні метрики JVM, `/tmp` | Діагностика та тимчасові файли. Backend має read-only filesystem із тимчасовим `/tmp`, без volume для бізнес-даних |
+| Critical Stateful Dependencies | `HttpSession`, файлові сесії, `@SessionAttributes`, sticky sessions | У базовому коді не виявлено; API не створює сесій. `customerId`/інші UUID передаються явно в запиті |
+| Critical Stateful Dependencies | Singleton/static collections, локальні кеші, бізнес-лічильники, `synchronized`/JVM locks | У базовому коді не виявлено. Колекції в методах не є сховищем між запитами; ID — UUID, перевірка унікальності — в БД |
+
+**Результат рефакторингу:** перша лабораторна вже винесла бізнес-стан у PostgreSQL, тому критичних in-memory залежностей для вилучення не знайдено. У цій гілці додано multi-instance розгортання, діагностичний фільтр, окремі ідентифікатори JDBC-з'єднань для спостереження в `pg_stat_activity`, перевірки взаємозамінності й документацію. Бізнес-операції не потребують штучного переписування. Сесійного стану немає, тому додавати Redis/сесії лише заради їх винесення не потрібно: shared storage тут — Primary DB, що дозволено умовою лабораторної.
+
+### Stateless Request Flow
+
+Контекст оформлення повністю міститься у `POST /api/orders`: `customerId` і список `productId/quantity`. Сервер не бере ціни або залишки з клієнта чи з пам'яті попередніх запитів.
+
+```mermaid
+sequenceDiagram
+    participant C as HTTP-клієнт
+    participant N1 as node-1
+    participant DB as Shared PostgreSQL
+    participant N2 as node-2
+    C->>N1: POST /api/orders (customerId, items)
+    N1->>DB: BEGIN, читання клієнта
+    N1->>DB: SELECT товари ORDER BY id FOR UPDATE
+    DB-->>N1: Актуальні ціни й залишки
+    N1->>N1: Валідація та розрахунок у локальних змінних
+    N1->>DB: INSERT order, UPDATE stock, INSERT items
+    N1->>DB: COMMIT
+    N1-->>C: 201, orderId, X-Instance-ID: node-1
+    C->>N2: GET /api/orders/{orderId}
+    N2->>DB: SELECT order та items
+    DB-->>N2: Підтверджені дані
+    N2-->>C: 200, актуальне замовлення, X-Instance-ID: node-2
+```
+
+Після запиту бізнес-контекст не утримується полями singleton-компонентів. В обох процесах однакові код, схема даних і правила транзакцій; відрізняються лише порт на хості та діагностична мітка. `INSTANCE_ID` задається конфігурацією, за його відсутності використовується `HOSTNAME`, а поза контейнером без обох значень — згенерований на час життя фільтра UUID. Вхідний `X-Instance-ID` ігнорується: клієнт не може підмінити мітку відповіді.
+
+### Гарантії та перевірка аварії
+
+- Отриманий `201` означає, що транзакція вже закомічена; зупинка одного backend не видаляє це замовлення.
+- Падіння до commit не повинно залишати частково створене замовлення чи частково списаний склад: PostgreSQL відкотить транзакцію після розриву з'єднання. Звільнення блокувань може потребувати часу на виявлення розриву.
+- Якщо commit відбувся, але клієнт не отримав відповідь, результат запиту для клієнта невідомий. Створення замовлення поки не має idempotency key, тому автоматично повторювати такий POST небезпечно.
+- Зупинений вузол не переносить активний HTTP-запит на інший процес. Другий вузол продовжує **наступні** операції зі спільним станом. Розрив з'єднання з убитим вузлом очікуваний, це не втрата підтверджених даних.
+
+`demo-stateless.ps1 -SimulateFailure` демонструє збій **між кроками бізнес-сценарію**, після підтвердженого створення замовлення. Окремий `StatelessClusterIT` перевіряє SIGKILL **усередині незавершеної транзакції**: у тимчасовій тестовій БД ставить advisory lock і trigger перед вставкою позиції, чекає його в `pg_stat_activity`, вбиває першу JVM після запису замовлення та зміни складу, перевіряє rollback і нове оформлення на другій JVM. Цей trigger не входить у Flyway-міграції або звичайний Compose-стек.
+
+### Покриття вимог другої лабораторної
+
+| Пункт | Результат |
+|---|---|
+| 2.1 Аудит стану | Класифікація Ephemeral / Shared / Critical у таблиці вище |
+| 2.2 Винесення стану | Уся персистентна бізнес-інформація та блокування у спільній PostgreSQL; сесій немає |
+| 2.3 Stateless Request Flow | Параметри, shared reads, атомарні записи, commit, читання іншим вузлом |
+| 2.4 Два instances та ідентифікація | `app` + `app2`, однаковий Docker image, `X-Instance-ID` |
+| 2.5 Consistency / instance loss | PowerShell/HTTP сценарії та інтеграційні тести двох окремих JVM |
+| 2.6 Архітектурна документація | Оновлені container/component схеми нижче |
+
+## Демонстрація першої лабораторної
 
 У PowerShell із кореня проєкту:
 
@@ -54,7 +162,7 @@ docker compose start
 5. Перезапустити БД та прочитати те саме замовлення за його ID.
 6. Пояснити транзакцію оформлення, порядок блокувань і потенційні bottlenecks.
 
-## Покриття вимог лабораторної
+## Покриття вимог першої лабораторної
 
 | Вимога | Реалізація |
 |---|---|
@@ -123,30 +231,42 @@ erDiagram
 flowchart LR
     client["Користувач / Swagger / HTTP Client"]
     subgraph system["Система замовлень — Docker Compose"]
-        app["Backend container\nJava 21 / Spring Boot\nREST API та бізнес-логіка"]
+        app["Backend node-1 / app\nJava 21 / Spring Boot\nStateless REST API"]
+        app2["Backend node-2 / app2\nТа сама кодова база й образ\nStateless REST API"]
         db[("Database container\nPostgreSQL 17\nКлієнти, товари, замовлення")]
         volume[("Named volume\npostgres-data")]
         app -->|"JDBC / PostgreSQL TCP 5432\nSQL, транзакції, Flyway"| db
+        app2 -->|"JDBC / PostgreSQL TCP 5432\nSQL, транзакції, Flyway"| db
         db -->|"Файлові операції / durable storage"| volume
     end
     client -->|"HTTP / JSON TCP 8080"| app
+    client -->|"HTTP / JSON TCP 8081"| app2
 ```
 
-Компоненти backend:
+Компонентна схема двох процесів; у кожному працюють ті самі controller → service → repository:
 
 ```mermaid
 flowchart TD
-    controllers["CustomerController / ProductController / OrderController"]
-    validation["DTO + Jakarta Validation"]
-    services["CustomerService / ProductService / OrderService"]
-    repositories["CustomerRepository / ProductRepository / OrderRepository"]
+    client[HTTP-клієнт]
+    subgraph node1["node-1 — окремий JVM-процес"]
+        filter1["InstanceIdFilter\nX-Instance-ID: node-1"]
+        controllers1["Controllers + DTO validation"]
+        services1["Services + транзакції"]
+        repositories1["Repositories / JdbcClient"]
+        filter1 --> controllers1 --> services1 --> repositories1
+    end
+    subgraph node2["node-2 — окремий JVM-процес"]
+        filter2["InstanceIdFilter\nX-Instance-ID: node-2"]
+        controllers2["Controllers + DTO validation"]
+        services2["Services + транзакції"]
+        repositories2["Repositories / JdbcClient"]
+        filter2 --> controllers2 --> services2 --> repositories2
+    end
     db[(PostgreSQL)]
-    errors["ApiExceptionHandler\nProblem Details"]
-    controllers --> validation
-    controllers --> services
-    services -->|"Транзакції Spring"| repositories
-    repositories -->|"Параметризований SQL / JdbcClient"| db
-    controllers -.-> errors
+    client -->|HTTP| filter1
+    client -->|HTTP| filter2
+    repositories1 -->|"SQL / shared state"| db
+    repositories2 -->|"SQL / shared state"| db
 ```
 
 Модульний моноліт достатній для поточного домену: дозволяє оформити замовлення і списати залишки однією транзакцією БД. Пакети розділені за предметними модулями, всередині яких є controller → service → repository. JDBC обраний для явних SQL-запитів і блокувань; ORM та прихованого lazy loading немає. Зовнішніх інтеграцій і черг у першій лабораторній немає.
@@ -166,6 +286,8 @@ POST створення замовлення не має idempotency key: пов
 ## Специфікація API
 
 Базовий шлях `/api`. Формат запитів і відповідей — JSON. Успішний POST створення повертає `201 Created` та заголовок `Location`.
+
+Відповіді API, включно з валідаційними помилками, містять `X-Instance-ID`. Цей заголовок є діагностичним; його не потрібно зберігати або надсилати для наступного запиту. Контракт бізнесових endpoints першої лабораторної збережений.
 
 | Метод | Шлях | Операція | Успіх |
 |---|---|---|---|
@@ -261,44 +383,53 @@ docker compose ps
 | Backend ↔ DB, багатопозиційне замовлення | `3 + 2N` послідовних SQL statements усередині транзакції | Latency зростає з кількістю позицій; довше утримуються locks і connections | Порівняти 1/10/50 позицій; batch для вставок, переглянути повернення даних після UPDATE |
 | Каталог, великі обсяги читань та глибокі сторінки | Кожен GET читає БД; OFFSET пропускає багато рядків | DB CPU/read I/O, дорожчі пізні сторінки, зростання p99 | `EXPLAIN (ANALYZE, BUFFERS)`; keyset pagination та кеш read-intensive запитів у наступних роботах |
 
-Єдині backend і PostgreSQL також є точками відмови. У цій роботі це прийняте спрощення; горизонтальне масштабування, балансувальник і Redis належать до наступних лабораторних.
+У другій лабораторній backend уже має два взаємозамінні екземпляри, але PostgreSQL залишається єдиною точкою відмови. Балансувальник, автоматичне перенаправлення трафіку і Redis належать до наступних лабораторних. Кожен backend має окремий пул: з `DB_POOL_SIZE=10` два вузли можуть зайняти сумарно до 20 робочих з'єднань БД, плюс тимчасові адміністративні/міграційні з'єднання.
 
 ## Тести та локальна розробка
 
 Для запуску поза контейнером потрібні JDK 21 та Docker. Maven завантажується через Wrapper.
 
 ```powershell
-# Швидкі тести обчислень без Docker
+# Швидкі тести обчислень та ідентифікації вузла без Docker
 .\mvnw.cmd test
 
-# Повна збірка та інтеграційні тести з реальною PostgreSQL у Testcontainers
+# Повна збірка: попередні тести + два окремі JVM-контейнери зі спільною PostgreSQL
 .\mvnw.cmd verify
+
+# Тільки нові кластерні інтеграційні тести (з побудовою JAR)
+.\mvnw.cmd verify '-Dit.test=StatelessClusterIT'
 ```
 
 У Linux/macOS: `sh mvnw test` і `sh mvnw verify`. Інтеграційні тести названі `*IT` і запускаються Maven Failsafe на фазі `verify`. Docker потрібен для повної перевірки; тести не пропускаються мовчки за його відсутності. Testcontainers створює окрему тимчасову БД, не використовує дані Compose і видаляє свої контейнери після тестів.
 
+`StatelessClusterIT` сам запускає ізольовані контейнери PostgreSQL і двох JVM на випадкових портах. Compose для нього піднімати не потрібно. Тестам потрібен інтернет для першого завантаження образів/залежностей. Вони перевіряють послідовну роботу через різні вузли, конкурентне оформлення на двох JVM, збереження commit після SIGKILL і відкат перерваної транзакції. Не запускайте лише фазу `failsafe:integration-test` на старому JAR — використовуйте `verify`, щоб перевіряти поточний код.
+
 Перевіряються CRUD/пагінація, Location headers, валідація й коди помилок, конфлікти email/SKU, історичні ціни, транзакційний rollback після примусової помилки БД, конкурентна купівля останніх одиниць, одноразове повернення складу при конкурентних скасуваннях, Flyway, health і OpenAPI. Persistence після рестарту перевіряє `demo.ps1 -VerifyPersistence`.
 
-Фактична перевірка 02.10.2026: `mvnw.cmd verify` — **14 тестів успішно, 0 помилок, 0 пропусків** (2 unit + 12 integration); `docker compose up --build -d --wait` — обидва сервіси healthy; `demo.ps1 -VerifyPersistence` — PASS, замовлення, позиції та залишок збережено після перезапуску PostgreSQL. Це функціональна перевірка, не вимірювання продуктивності.
+Історична перевірка **першої лабораторної**, до змін цієї гілки, 02.10.2026: 14 тестів успішно; стек з одного backend і БД був healthy; `demo.ps1 -VerifyPersistence` — PASS. **Це не результат перевірки лабораторної №2.** Нові unit/cluster тести, оновлений Compose і `demo-stateless.ps1` підготовлені, але не запускалися на прохання користувача.
 
 Локальний backend з БД у Docker:
 
 ```powershell
-docker compose stop app
+docker compose stop app app2
 docker compose -f compose.yaml -f compose.dev.yaml up -d --wait db
 .\mvnw.cmd spring-boot:run
 ```
 
 Стандартний JDBC URL — `jdbc:postgresql://localhost:5432/orders`. Якщо змінено пароль або порт БД, перед запуском Java задайте `DB_URL`, `DB_USERNAME`, `DB_PASSWORD` у середовищі IDE/термінала. Spring Boot самостійно не читає `.env`, його читає Compose.
 
+Для двох JVM поза Docker відкрийте два термінали, задайте в першому `$env:PORT='8080'; $env:INSTANCE_ID='node-1'`, у другому `$env:PORT='8081'; $env:INSTANCE_ID='node-2'` та запустіть `java -jar target/order-service-1.0.0.jar` у кожному після `mvnw.cmd package`. Обидва процеси повинні використовувати однаковий `DB_URL`. Для сценарію з `docker compose kill` використовуйте саме контейнерний запуск.
+
 | Змінна | Типове значення | Призначення |
 |---|---|---|
 | `DB_URL` | `jdbc:postgresql://localhost:5432/orders` | Адреса БД; Compose використовує host `db` |
 | `DB_USERNAME` | `orders` | Користувач БД |
 | `DB_PASSWORD` | `lab1-local-password` | Пароль локальної БД |
-| `DB_POOL_SIZE` | `10` | Ліміт з'єднань застосунку |
+| `DB_POOL_SIZE` | `10` | Ліміт з'єднань кожного екземпляра |
 | `PORT` | `8080` | HTTP-порт Java-процесу |
 | `APP_PORT` | `8080` | Опублікований порт Compose |
+| `APP2_PORT` | `8081` | Опублікований порт другого backend |
+| `INSTANCE_ID` | `node-1` / `node-2` у Compose | Діагностична ідентичність JVM, заголовок відповіді |
 
 ## Структура проєкту
 
@@ -308,15 +439,19 @@ src/main/java/ua/edu/highload/
   customer/       контролер, сервіс, repository, DTO клієнта
   catalog/        каталог, редагування та складські операції
   order/          оформлення, історія і скасування замовлень
-  common/         помилки API, пагінація, OpenAPI
+  common/         помилки API, пагінація, OpenAPI, InstanceIdFilter
 src/main/resources/
   application.yaml
   db/migration/V1__create_order_schema.sql
 src/test/java/ua/edu/highload/
   OrderApiIT.java
+  StatelessClusterIT.java
+  common/InstanceIdFilterTest.java
   order/OrderItemTest.java
 docs/api.http
+docs/stateless.http
 scripts/demo.ps1
+scripts/demo-stateless.ps1
 compose.yaml
 compose.dev.yaml
 Dockerfile
