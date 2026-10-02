@@ -10,7 +10,7 @@ public class OpenApiConfiguration {
     @Bean
     OpenAPI orderApi() {
         return new OpenAPI().info(new Info()
-                .title("Order Service — лабораторні роботи №1–2")
+                .title("Order Service — лабораторні роботи №1–3")
                 .version("1.0.0")
                 .description("Stateless API: клієнти, каталог та транзакційні замовлення. Усі ціни в UAH. "
                         + "Кожна відповідь містить X-Instance-ID; будь-який вузол працює зі спільною PostgreSQL. "

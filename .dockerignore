@@ -4,3 +4,6 @@ target
 .env
 *.log
 docs
+results
+load-tests
+infra

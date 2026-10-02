@@ -1,30 +1,5 @@
+# Historical project name preserves the database volume from Labs 1-2.
 name: high-load-lab1
-
-# Keep the project name to reuse the PostgreSQL volume created in Lab 1.
-x-backend: &backend
-  image: high-load-order-service:lab2
-  environment: &backend-environment
-    DB_URL: jdbc:postgresql://db:5432/orders
-    DB_USERNAME: orders
-    DB_PASSWORD: ${DB_PASSWORD:-lab1-local-password}
-    DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
-    JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=75.0
-  depends_on:
-    db:
-      condition: service_healthy
-  networks:
-    - backend
-  read_only: true
-  tmpfs:
-    - /tmp
-  healthcheck:
-    test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/actuator/health"]
-    interval: 10s
-    timeout: 3s
-    start_period: 40s
-    retries: 12
-  restart: unless-stopped
-
 services:
   db:
     image: postgres:17.4-alpine
@@ -34,8 +9,7 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:-lab1-local-password}
     volumes:
       - postgres-data:/var/lib/postgresql/data
-    networks:
-      - backend
+    networks: [backend]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U orders -d orders"]
       interval: 5s
@@ -44,26 +18,70 @@ services:
     restart: unless-stopped
 
   app:
-    <<: *backend
     build: .
+    image: high-load-order-service:lab3
+    deploy:
+      replicas: 2
     environment:
-      <<: *backend-environment
-      INSTANCE_ID: node-1
+      DB_URL: jdbc:postgresql://db:5432/orders
+      DB_USERNAME: orders
+      DB_PASSWORD: ${DB_PASSWORD:-lab1-local-password}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
+      SPRING_PROFILES_ACTIVE: lab3
+      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=75.0
+      # INSTANCE_ID falls back to each container's unique HOSTNAME.
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [backend]
+    read_only: true
+    tmpfs: [/tmp]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      start_period: 40s
+      retries: 20
+    restart: unless-stopped
+
+  lb:
+    image: haproxy:3.0-alpine
+    environment:
+      LB_ALGORITHM: ${LB_ALGORITHM:-roundrobin}
+    volumes:
+      - ./infra/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     ports:
       - "127.0.0.1:${APP_PORT:-8080}:8080"
+    depends_on:
+      app:
+        condition: service_healthy
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
 
-  app2:
-    <<: *backend
-    # app builds this shared image. Start the whole stack with --build on a fresh checkout.
-    pull_policy: never
+  load:
+    image: grafana/k6:0.57.0
+    profiles: [tools]
+    entrypoint: ["k6", "run", "/scripts/scaling.js"]
     environment:
-      <<: *backend-environment
-      INSTANCE_ID: node-2
-    ports:
-      - "127.0.0.1:${APP2_PORT:-8081}:8080"
+      BASE_URL: http://lb:8080
+      VUS: ${VUS:-20}
+      DURATION: ${DURATION:-30s}
+      RUN_NAME: ${RUN_NAME:-manual}
+      SLOW_INSTANCE: ${SLOW_INSTANCE:-}
+      INSTANCE_IDS: ${INSTANCE_IDS:-}
+      REQUIRE_NO_ERRORS: ${REQUIRE_NO_ERRORS:-false}
+    volumes:
+      - ./load-tests:/scripts:ro
+      - ./results:/results
+    networks: [backend]
 
 networks:
   backend:
-
 volumes:
   postgres-data:
