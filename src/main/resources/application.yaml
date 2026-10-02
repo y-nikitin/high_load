@@ -1,6 +1,15 @@
 app:
   instance-id: ${INSTANCE_ID:${HOSTNAME:}}
+  cache:
+    enabled: ${CACHE_ENABLED:false}
+    ttl-seconds: ${CACHE_TTL_SECONDS:30}
 spring:
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      connect-timeout: 200ms
+      timeout: 200ms
   application:
     name: order-service
   datasource:
@@ -27,6 +36,9 @@ server:
     include-message: never
     include-stacktrace: never
 management:
+  health:
+    redis:
+      enabled: false
   endpoints:
     web:
       exposure:

@@ -13,9 +13,11 @@ import ua.edu.highload.common.PageResponse;
 @RequestMapping("/api/products")
 public class ProductController {
     private final ProductService service;
+    private final CatalogCache cache;
 
-    public ProductController(ProductService service) {
+    public ProductController(ProductService service, CatalogCache cache) {
         this.service = service;
+        this.cache = cache;
     }
 
     @PostMapping
@@ -28,9 +30,11 @@ public class ProductController {
 
     @GetMapping
     @Operation(summary = "Каталог активних товарів із пагінацією (page від 0, size 1–100)")
-    public PageResponse<Product> list(@RequestParam(defaultValue = "0") int page,
+    public ResponseEntity<PageResponse<Product>> list(@RequestParam(defaultValue = "0") int page,
                                       @RequestParam(defaultValue = "20") int size) {
-        return service.list(page, size);
+        PageResponse.offset(page, size);
+        CatalogCache.Result result = cache.read(page, size, () -> service.list(page, size));
+        return ResponseEntity.ok().header("X-Cache", result.status()).body(result.body());
     }
 
     @GetMapping("/{id}")
