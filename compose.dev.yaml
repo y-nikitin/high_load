@@ -1,0 +1,5 @@
+# Optional: expose PostgreSQL only for running Java from an IDE.
+services:
+  db:
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"

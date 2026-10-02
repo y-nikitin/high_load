@@ -1,0 +1,62 @@
+### IntelliJ IDEA HTTP Client. Execute from top to bottom against docker compose.
+@baseUrl = http://localhost:8080
+
+### 1. Register a customer. Use a new email if running again.
+POST {{baseUrl}}/api/customers
+Content-Type: application/json
+
+{"name":"Olena Kovalenko","email":"olena.lab1@example.com"}
+
+> {% client.global.set("customerId", response.body.id); %}
+
+### 2. Create a product. Use a new SKU if running again.
+POST {{baseUrl}}/api/products
+Content-Type: application/json
+
+{"sku":"KEYBOARD-001","name":"Mechanical keyboard","description":"USB keyboard","price":1500.00,"stock":10}
+
+> {% client.global.set("productId", response.body.id); %}
+
+### 3. Catalog
+GET {{baseUrl}}/api/products?page=0&size=20
+
+### 4. Update product
+PUT {{baseUrl}}/api/products/{{productId}}
+Content-Type: application/json
+
+{"name":"Mechanical keyboard","description":"Updated description","price":1600.00}
+
+### 5. Place an order; server calculates the total
+POST {{baseUrl}}/api/orders
+Content-Type: application/json
+
+{"customerId":"{{customerId}}","items":[{"productId":"{{productId}}","quantity":2}]}
+
+> {% client.global.set("orderId", response.body.id); %}
+
+### 6. Read order (also execute after docker compose restart db)
+GET {{baseUrl}}/api/orders/{{orderId}}
+
+### 7. Customer order history
+GET {{baseUrl}}/api/orders?customerId={{customerId}}&page=0&size=20
+
+### 8. Expected 409: not enough stock
+POST {{baseUrl}}/api/orders
+Content-Type: application/json
+
+{"customerId":"{{customerId}}","items":[{"productId":"{{productId}}","quantity":1000}]}
+
+### 9. Cancel; repeat to verify stock is not restored twice
+POST {{baseUrl}}/api/orders/{{orderId}}/cancel
+
+### 10. Restock
+POST {{baseUrl}}/api/products/{{productId}}/restock
+Content-Type: application/json
+
+{"quantity":5}
+
+### 11. Soft delete
+DELETE {{baseUrl}}/api/products/{{productId}}
+
+### 12. Database-aware health
+GET {{baseUrl}}/actuator/health
